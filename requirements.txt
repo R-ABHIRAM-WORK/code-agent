@@ -1,0 +1,4 @@
+google-generativeai
+flake8
+black
+pytest

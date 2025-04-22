@@ -43,7 +43,7 @@ SYSTEM_PROMPT = (
 # Maximum chunk size for reading large files (in bytes)
 MAX_CHUNK_SIZE = 200 * 1024
 
-def chunk_file(path: str, max_size: int = MAX_CHUNK_SIZE) -> Dict[str, Any]:
+def chunk_file(path: str, max_size: int) -> Dict[str, Any]:
     """
     Read a file in chunks to avoid sending too much content at once.
     Returns {'status':'success','chunks':[...]} or {'status':'error',...}.
@@ -61,6 +61,18 @@ def chunk_file(path: str, max_size: int = MAX_CHUNK_SIZE) -> Dict[str, Any]:
         return {"status": "success", "chunks": chunks}
     except Exception as e:
         return {"status": "error", "error": str(e)}
+
+def process_large_file(path: str, max_size: int) -> Dict[str, Any]:
+    chunk_result = chunk_file(path, max_size)
+    if chunk_result.get("status") != "success":
+        return chunk_result
+    chunks = chunk_result["chunks"]
+    responses = []
+    for i, chunk in enumerate(chunks):
+        print(f"Processing chunk {i+1} of {len(chunks)}...")
+        resp = chat.send_message(f"Process this chunk of the file:\n{chunk}")
+        responses.append(resp.text if hasattr(resp, 'text') else str(resp))
+    return {"status": "success", "responses": responses}
 
 def read_file(path: str) -> Dict[str, Any]:
     """
@@ -258,8 +270,7 @@ try:
     )
     chat = genai_client.chats.create(
         model='gemini-2.5-pro-preview-03-25',
-        config=config,
-        stream=True
+        config=config
     )
 except Exception as e:
     print(f"[ERROR] Failed to configure Gemini chat: {e}")
@@ -273,6 +284,15 @@ if __name__ == '__main__':
             if user_input.lower() in ('exit', 'quit'):
                 print('Agent: Goodbye!')
                 break
+            if user_input.startswith('process_file '):
+                _, file_path = user_input.split(' ', 1)
+                result = process_large_file(file_path, MAX_CHUNK_SIZE)
+                if result["status"] == "success":
+                    for i, r in enumerate(result["responses"]):
+                        print(f"Chunk {i+1} result:\n{r}\n")
+                else:
+                    print(f"Error: {result.get('error', result)}")
+                continue
             response = chat.send_message(user_input)
             # If streaming, print as it arrives
             if hasattr(response, 'stream'):

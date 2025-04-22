@@ -21,8 +21,21 @@ Code Agent is a supercharged coding assistant powered by Google Gemini. It provi
   pip install google-generativeai flake8 black pytest
   ```
 - **API Key**: Export your Google Generative AI API key:
+
   ```bash
   export GOOGLE_API_KEY="YOUR_API_KEY_HERE"
+  ```
+
+  For Windows (Command Prompt):
+
+  ```
+  set GOOGLE_API_KEY=YOUR_API_KEY_HERE
+  ```
+
+  For Windows (PowerShell):
+
+  ```
+  $env:GOOGLE_API_KEY="YOUR_API_KEY_HERE"
   ```
 
 ## Installation
@@ -53,21 +66,28 @@ python main.py
 - **Prompt**: Type your natural-language commands (e.g., "create a new file config.json with default settings").
 - **Exit**: Type `exit` or `quit` to terminate the session.
 - **Streaming**: Outputs stream in real time; large responses won’t exceed token limits.
+- **Large File Processing**: To process a large file automatically in manageable chunks, use:
+  ```
+  process_file <path>
+  ```
+  The agent will process the file chunk by chunk and show progress.
 
 ## Editing Large Codebases
 
 When working with projects that exceed token limits:
 
-1. **Read in Chunks**
-   ```python
-   response = chunk_file('path/to/large_file.py')
-   ```
-2. **Review & Edit** each chunk sequentially via your prompts.
-3. **Apply Changes** with `update_file('path/to/large_file.py', edited_content)`.
-4. **Commit** changes:
-   ```python
-   git_commit('Refactored large_file in chunks')
-   ```
+- **Recommended:** Use the `process_file <path>` command for automatic chunked processing and progress feedback.
+- **Manual (Advanced):**
+  1. Read in Chunks
+     ```python
+     response = chunk_file('path/to/large_file.py')
+     ```
+  2. Review & Edit each chunk sequentially via your prompts.
+  3. Apply Changes with `update_file('path/to/large_file.py', edited_content)`.
+  4. Commit changes:
+     ```python
+     git_commit('Refactored large_file in chunks')
+     ```
 
 ## Development & Contributing
 
