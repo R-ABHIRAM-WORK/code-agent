@@ -36,7 +36,7 @@ Code Agent is a supercharged coding assistant powered by Google Gemini. It provi
 
   For Windows (PowerShell):
 
-  ```
+  ```powershell
   $env:GOOGLE_API_KEY="YOUR_API_KEY_HERE"
   ```
 
@@ -118,6 +118,33 @@ When working with projects that exceed token limits:
      ```python
      git_commit('Refactored large_file in chunks')
      ```
+
+---
+
+## Example: Quirky Excuse Generator Website
+
+When you run the project, you’ll see:
+
+```
+=== Gemini Super Agent ===
+You: Build a quirky website that generates random, funny excuses for being late to work or school. Each time the user clicks a button, display a new, hilarious excuse. Add a feature to copy the excuse to the clipboard and a button to share it on social media. Create all the files and folders accordingly
+Agent: Okay, the files are created, and the website should be open in your browser.
+
+You can now:
+
+1. Click the "Get New Excuse!" button to see different funny excuses.
+2. Click the "Copy Excuse" button to copy the current excuse to your clipboard.
+3. Click the "Share (Twitter)" button to open a new Twitter tab with a pre-filled tweet containing the excuse.
+
+Enjoy your quirky excuse generator! Let me know if you'd like any modifications.
+```
+
+**Note:**
+
+- The `example` directory contains the `static` and `templates` folders for the website.
+- All files in the `example` directory are committed to version control.
+
+---
 
 ## Development & Contributing
 

@@ -1,0 +1,110 @@
+body {
+    font-family: 'Gaegu', cursive;
+    background-color: #f0f8ff; /* AliceBlue */
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    margin: 0;
+    color: #333;
+    text-align: center;
+}
+
+.container {
+    background-color: #fff0f5; /* LavenderBlush */
+    padding: 40px 50px;
+    border-radius: 20px;
+    box-shadow: 5px 5px 15px rgba(0, 0, 0, 0.1);
+    border: 3px dashed #ffb6c1; /* LightPink */
+    max-width: 500px;
+}
+
+h1 {
+    color: #ff69b4; /* HotPink */
+    font-size: 3em;
+    margin-bottom: 10px;
+    font-weight: 700;
+}
+
+.subtitle {
+    color: #666;
+    font-size: 1.2em;
+    margin-bottom: 30px;
+}
+
+.excuse-box {
+    background-color: #fffacd; /* LemonChiffon */
+    border: 2px solid #ffd700; /* Gold */
+    padding: 20px;
+    margin-bottom: 30px;
+    border-radius: 10px;
+    min-height: 80px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+#excuse-display {
+    font-size: 1.5em;
+    font-weight: 400;
+    color: #555;
+    margin: 0;
+}
+
+.button-group {
+    display: flex;
+    justify-content: center;
+    gap: 15px;
+    flex-wrap: wrap; /* Allow buttons to wrap on smaller screens */
+}
+
+button {
+    font-family: 'Gaegu', cursive;
+    padding: 12px 25px;
+    font-size: 1.2em;
+    font-weight: 700;
+    cursor: pointer;
+    border: none;
+    border-radius: 25px;
+    transition: transform 0.2s ease, background-color 0.2s ease;
+    box-shadow: 2px 2px 5px rgba(0,0,0,0.1);
+}
+
+button:hover {
+    transform: scale(1.05);
+}
+
+#generate-btn {
+    background-color: #90ee90; /* LightGreen */
+    color: #fff;
+}
+
+#generate-btn:hover {
+    background-color: #3cb371; /* MediumSeaGreen */
+}
+
+#copy-btn {
+    background-color: #add8e6; /* LightBlue */
+    color: #fff;
+}
+
+#copy-btn:hover {
+    background-color: #87ceeb; /* SkyBlue */
+}
+
+#share-btn {
+    background-color: #ffa07a; /* LightSalmon */
+    color: #fff;
+}
+
+#share-btn:hover {
+    background-color: #f08080; /* LightCoral */
+}
+
+.feedback {
+    margin-top: 15px;
+    font-size: 1em;
+    color: #3cb371;
+    height: 20px; /* Reserve space */
+    font-weight: bold;
+}
