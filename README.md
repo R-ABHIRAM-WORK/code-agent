@@ -12,6 +12,8 @@ Code Agent is a supercharged coding assistant powered by Google Gemini. It provi
 - **Code Quality**: lint (`lint_code`), format (`format_code`), and test (`run_tests`) your code.
 - **Version Control**: stage, commit (`git_commit`), and push (`git_push`) changes with Git.
 - **User Prompts**: gather user input on demand via `prompt_input`.
+- **No Caching**: The agent no longer uses Gemini server-side caching. All chat and tool operations are performed live, ensuring compatibility and reliability for all script execution and file operations.
+- **Smart Script Execution**: When you ask the agent to run a script, it will automatically detect if the script requires user input or is a server. If so, it launches the script in a new terminal window for interactive use; otherwise, it runs the script in the current terminal and returns the output directly.
 
 ## Prerequisites
 
