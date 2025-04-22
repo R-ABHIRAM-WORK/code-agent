@@ -226,8 +226,13 @@ def prompt_input(message: str) -> Dict[str, Any]:
     return {'user_input': val}
 
 
-def chunk_file(path: str, chunk_size: int = 100, chunk_index: int = 0) -> Dict[str, Any]:
+def chunk_file(path: str, chunk_size: int, chunk_index: int) -> Dict[str, Any]:
     """Read a file in chunks. Returns the specified chunk (0-based)."""
+    # Handle default values if caller passes None
+    if chunk_size is None:
+        chunk_size = 100
+    if chunk_index is None:
+        chunk_index = 0
     try:
         with open(path, 'r', encoding='utf-8') as f:
             lines = f.readlines()
@@ -249,8 +254,13 @@ def chunk_file(path: str, chunk_size: int = 100, chunk_index: int = 0) -> Dict[s
         return {'status': 'error', 'error': str(e)}
 
 
-def update_file_chunk(path: str, chunk_content: str, chunk_size: int = 100, chunk_index: int = 0) -> Dict[str, Any]:
+def update_file_chunk(path: str, chunk_content: str, chunk_size: int, chunk_index: int) -> Dict[str, Any]:
     """Update a specific chunk of a file (0-based)."""
+    # Handle default values if caller passes None
+    if chunk_size is None:
+        chunk_size = 100
+    if chunk_index is None:
+        chunk_index = 0
     try:
         with open(path, 'r', encoding='utf-8') as f:
             lines = f.readlines()
