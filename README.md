@@ -74,6 +74,34 @@ python main.py
   ```
   The agent will process the file chunk by chunk and show progress.
 
+## Chunked File Processing and Editing
+
+When working with very large files (1,000+ lines), use the chunked file tools to avoid memory or token errors:
+
+- **Read a file in chunks:**
+
+  ```python
+  response = chunk_file('path/to/large_file.py', chunk_size=100, chunk_index=0)
+  # chunk_index is 0-based; increase to get the next chunk
+  # response['chunk'] contains the chunk content
+  # response['total_chunks'] gives the number of chunks
+  ```
+
+- **Edit a specific chunk:**
+
+  ```python
+  update_file_chunk('path/to/large_file.py', new_chunk_content, chunk_size=100, chunk_index=0)
+  # Only the specified chunk is replaced
+  ```
+
+- **Recommended workflow:**
+  1. Use `chunk_file` to read each chunk sequentially.
+  2. Edit the chunk as needed.
+  3. Use `update_file_chunk` to write back only the changed chunk.
+  4. Repeat for all chunks.
+
+This allows you to process and edit files of any size without exceeding memory or token limits.
+
 ## Editing Large Codebases
 
 When working with projects that exceed token limits:
