@@ -24,7 +24,7 @@ SYSTEM_PROMPT = (
     "Detach long-running servers so the chat loop remains responsive. "
     "Use 'run_script' to capture output for non-interactive scripts, and 'start_interactive' for scripts requiring user input. "
     "Use 'open_in_browser' for quick HTML previews."
-    "never use the main.py,README.md and requirements.txt files to write any code and also never delete it."
+    "never use the main.py,README.md and requirements.txt files to write any code and also never delete it in current directory.you can create it within a new subdirectory only."
 )
 
 # Tool functions
@@ -329,7 +329,11 @@ def strip_code_block_markers(text: str) -> str:
 
 def generate_file_content(file_path: str, user_input: str) -> str:
     """Prompt Gemini to generate content for a single file based on the user request and file path."""
-    prompt = f"Generate only the code for the file '{file_path}' as part of this project: {user_input}\nDo not include explanations or any other files. Output only the code for {file_path}."
+    prompt = (
+        f"Generate the complete code for the file '{file_path}' as part of this project: {user_input}. "
+        f"Assume all other files in the project plan already exist and can be imported or referenced as needed, even if they are generated later. "
+        f"Do not include explanations or any other files. Output only the code for {file_path}."
+    )
     response = chat.send_message(prompt)
     return strip_code_block_markers(response.text)
 
