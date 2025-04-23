@@ -1,0 +1,129 @@
+/* Network Visualization Specific Styles */
+
+/* Nodes (Neurons) */
+.node circle {
+    stroke: #333;
+    stroke-width: 1.5px;
+    cursor: pointer;
+    transition: fill 0.3s ease, stroke 0.3s ease, r 0.3s ease; /* Smooth transitions */
+}
+
+.node circle:hover {
+    stroke: var(--accent-color);
+    stroke-width: 3px;
+}
+
+/* Node Colors based on Layer Type */
+.node.input-layer circle {
+    fill: #e0e0e0; /* Light grey for input */
+}
+
+.node.hidden-layer circle {
+    fill: var(--secondary-color); /* Default hidden layer color (Teal) */
+}
+
+.node.output-layer circle {
+    fill: var(--primary-color); /* Blue for output */
+}
+
+/* Node Colors based on Activation Function (Applied as classes) */
+.node.activation-relu circle { fill: #ffcc80; } /* Light Orange */
+.node.activation-gelu circle { fill: #ffab91; } /* Light Coral */
+.node.activation-sigmoid circle { fill: #bcaaa4; } /* Light Brown */
+.node.activation-tanh circle { fill: #ce93d8; } /* Light Purple */
+.node.activation-softmax circle { fill: #ef9a9a; } /* Light Red */
+.node.activation-linear circle { fill: #c5e1a5; } /* Light Green */
+/* Add more colors if needed */
+
+
+/* Links (Connections/Weights) */
+.link {
+    stroke: #999;
+    stroke-width: 1px; /* Default width */
+    stroke-opacity: 0.6;
+    transition: stroke 0.3s ease, stroke-width 0.3s ease; /* Smooth transitions */
+}
+
+.link:hover {
+    stroke: var(--accent-color);
+    stroke-width: 2.5px;
+    stroke-opacity: 1.0;
+}
+
+/* Style links based on weight sign (can be applied via JS) */
+.link.positive-weight {
+    stroke: #66bb6a; /* Greenish for positive */
+}
+
+.link.negative-weight {
+    stroke: #ef5350; /* Reddish for negative */
+}
+
+/* Text Labels within SVG */
+.node-label, .link-label {
+    font-family: var(--font-family);
+    font-size: 9px;
+    fill: #222;
+    pointer-events: none; /* Prevent text from interfering with hover on nodes/links */
+    text-anchor: middle; /* Center text */
+}
+
+.node-value { /* For displaying activation/logit inside node */
+    font-size: 10px;
+    font-weight: bold;
+    fill: #000;
+    text-anchor: middle;
+    dominant-baseline: central;
+    pointer-events: none;
+}
+
+.bias-label { /* Style for bias indicators if added */
+    font-size: 8px;
+    fill: #555;
+}
+
+/* Tooltip Styling (if using SVG text or simple CSS tooltips) */
+.tooltip {
+    position: absolute; /* Position relative to the container */
+    background-color: rgba(0, 0, 0, 0.75);
+    color: white;
+    padding: 5px 10px;
+    border-radius: 4px;
+    font-size: 12px;
+    pointer-events: none; /* Don't block mouse events */
+    opacity: 0;
+    transition: opacity 0.2s;
+    white-space: pre; /* Preserve formatting */
+    z-index: 10;
+}
+
+/* Animation Classes (Example - can be triggered by JS) */
+.node.activating circle {
+    animation: pulse 0.5s ease-out;
+}
+
+.link.transmitting {
+    animation: transmit 0.5s ease-out;
+}
+
+@keyframes pulse {
+    0% { r: 10; } /* Assuming default radius is 10 */
+    50% { r: 13; stroke-width: 3px; }
+    100% { r: 10; stroke-width: 1.5px; }
+}
+
+@keyframes transmit {
+    0% { stroke-opacity: 0.6; stroke-width: 1px; }
+    50% { stroke-opacity: 1.0; stroke-width: 3px; stroke: var(--accent-color); }
+    100% { stroke-opacity: 0.6; stroke-width: 1px; stroke: #999; } /* Return to default or weight-based color */
+}
+
+/* Hide/Show elements based on checkboxes */
+.visualization-hidden .link-label,
+.visualization-hidden .bias-label {
+    display: none;
+}
+
+.visualization-hidden .node-value {
+    display: none;
+}
