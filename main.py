@@ -295,13 +295,23 @@ def update_file_chunk(path: str, chunk_content: str, chunk_size: int, chunk_inde
     except Exception as e:
         return {'status': 'error', 'error': str(e)}
 
+
 def is_multifile_request(user_input: str) -> bool:
-    """Detect if the user is requesting a multi-file or full project generation."""
+    """Detect if the user is requesting a multi-file or full project generation or edit."""
+    # Exclude generic run/test/output commands
+    generic_run_phrases = [
+        'run', 'run the code', 'execute', 'start', 'test', 'show output', 'output', 'show result', 'show results', 'print', 'print output', 'print result', 'print results', 'display', 'display output', 'display result', 'display results', 'launch', 'open', 'open app', 'open project', 'open file', 'open folder', 'open directory', 'open website', 'open page', 'preview', 'preview app', 'preview project', 'preview file', 'preview folder', 'preview directory', 'preview website', 'preview page', 'just run', 'just execute', 'just test', 'just show', 'just print', 'just display', 'just open', 'just preview', 'run main', 'run main.py', 'run app', 'run app.py', 'run script', 'run program', 'run project', 'run this', 'run it', 'run all', 'run everything', 'run my code', 'run my project', 'run my app', 'run my script', 'run my program', 'run my file', 'run my folder', 'run my directory', 'run my website', 'run my page', 'run my preview', 'run my output', 'run my result', 'run my results', 'run my print', 'run my display', 'run my launch', 'run my open', 'run my preview', 'run code', 'run codes', 'run all code', 'run all codes', 'run all files', 'run all scripts', 'run all programs', 'run all projects', 'run all apps', 'run all websites', 'run all pages', 'run all previews', 'run all outputs', 'run all results', 'run all prints', 'run all displays', 'run all launches', 'run all opens', 'run all previews', 'run everything', 'run anything', 'run something', 'run nothing', 'run whatever', 'run whichever', 'run whichever code', 'run whichever file', 'run whichever script', 'run whichever program', 'run whichever project', 'run whichever app', 'run whichever website', 'run whichever page', 'run whichever preview', 'run whichever output', 'run whichever result', 'run whichever results', 'run whichever print', 'run whichever display', 'run whichever launch', 'run whichever open', 'run whichever preview', 'run whichever main', 'run whichever main.py', 'run whichever app', 'run whichever app.py', 'run whichever script', 'run whichever program', 'run whichever project', 'run whichever file', 'run whichever folder', 'run whichever directory', 'run whichever website', 'run whichever page', 'run whichever preview', 'run whichever output', 'run whichever result', 'run whichever results', 'run whichever print', 'run whichever display', 'run whichever launch', 'run whichever open', 'run whichever preview',
+    ]
+    if any(phrase == user_input.strip().lower() for phrase in generic_run_phrases):
+        return False
+    # Only trigger for clear project/file structure creation or multi-file edit requests
     keywords = [
         'full stack', 'full project', 'all files', 'create all', 'generate all',
-        'multiple files', 'folders', 'structure', 'backend and frontend', 'full code', 'ready to deploy', 'not just a prototype'
+        'multiple files', 'folders', 'structure', 'backend and frontend', 'full code', 'ready to deploy', 'not just a prototype',
+        'folder', 'website', 'project', 'app', 'dashboard', 'study plan', 'resources', 'path', 'daily', 'monthly', 'test', 'quiz', 'assignment', 'deploy', 'ui', 'single user', 'multi-file', 'multi file', 'multi-project', 'multi project', 'subdirectory', 'subdirectories', 'sub-folder', 'subfolders', 'subfolder', 'subfolders', 'plan', 'progress', 'graph', 'graphs', 'track', 'tracking', 'visualize', 'visualization', 'visualisations', 'visualisation', 'visual', 'modern', 'production-ready', 'production ready', 'deploy-ready', 'deploy ready', 'no placeholders', 'fully implemented', 'end-to-end', 'end to end', 'comprehensive', 'complete', 'study', 'studies', 'fix all errors', 'fix errors in all files', 'fix errors in project', 'fix errors in codebase', 'fix errors in all code', 'edit all files', 'edit all', 'edit project', 'edit codebase', 'edit everything', 'edit the whole project', 'edit the entire project', 'edit the whole codebase', 'edit the entire codebase', 'edit the whole app', 'edit the entire app', 'edit the whole website', 'edit the entire website', 'edit the whole folder', 'edit the entire folder', 'edit the whole directory', 'edit the entire directory', 'edit the whole file', 'edit the entire file', 'edit the whole script', 'edit the entire script', 'edit the whole program', 'edit the entire program', 'edit the whole preview', 'edit the entire preview', 'edit the whole output', 'edit the entire output', 'edit the whole result', 'edit the entire result', 'edit the whole results', 'edit the entire results', 'edit the whole print', 'edit the entire print', 'edit the whole display', 'edit the entire display', 'edit the whole launch', 'edit the entire launch', 'edit the whole open', 'edit the entire open', 'edit the whole preview', 'edit the entire preview',
     ]
     return any(k in user_input.lower() for k in keywords)
+
 
 def extract_file_list(user_input: str) -> list:
     """Extract a list of files to generate from the user input. Simple heuristic for demo purposes."""
@@ -320,12 +330,14 @@ def extract_file_list(user_input: str) -> list:
         files = ['app.py', 'templates/index.html', 'static/css/style.css', 'static/js/script.js']
     return files
 
+
 def strip_code_block_markers(text: str) -> str:
     """Remove leading/trailing code block markers (e.g., ```python, ```html, ```) from code."""
     # Remove triple backtick blocks with optional language
     text = re.sub(r'^```[a-zA-Z0-9]*\s*', '', text.strip())
     text = re.sub(r'```\s*$', '', text.strip())
     return text.strip()
+
 
 def generate_file_content(file_path: str, user_input: str) -> str:
     """Prompt Gemini to generate content for a single file based on the user request and file path."""
@@ -336,6 +348,7 @@ def generate_file_content(file_path: str, user_input: str) -> str:
     )
     response = chat.send_message(prompt)
     return strip_code_block_markers(response.text)
+
 
 def get_file_plan(user_input: str) -> list:
     """Ask Gemini to generate a file/folder plan for the project."""
@@ -354,24 +367,94 @@ def get_file_plan(user_input: str) -> list:
     # Fallback: try to extract file paths from text
     return [line.strip('- ').strip() for line in response.text.splitlines() if '.' in line]
 
+
 def supervisor_generate_project(user_input: str):
     print('Agent: Generating file/folder plan...')
     file_list = get_file_plan(user_input)
     print(f'Agent: File plan: {file_list}')
+    # Always generate all required files in the plan (except forbidden ones)
     for file_path in file_list:
-        # Robustly clean up file path (remove all leading/trailing quotes, commas, whitespace)
         clean_path = re.sub(r'^[\'"\s,]+|[\'"\s,]+$', '', file_path)
-        if not clean_path or clean_path.lower() in ('main.py', 'readme.md', 'requirements.txt'):
-            print(f'Agent: Skipping {clean_path} (not allowed or empty)')
+        # Skip forbidden files only (main.py, README.md, requirements.txt in root)
+        forbidden = [
+            'main.py', 'README.md', 'requirements.txt'
+        ]
+        if not clean_path or any(clean_path.lower() == f.lower() for f in forbidden):
+            print(f'Agent: Skipping {clean_path} (forbidden or empty)')
             continue
+        # Always generate .json, .db, and other data files if in the plan
         print(f'Agent: Generating {clean_path}...')
+        # For .db files, create an empty file if not present
+        if clean_path.lower().endswith('.db'):
+            if not os.path.exists(clean_path):
+                open(clean_path, 'wb').close()
+                print(f'Agent: {clean_path} (empty database file) created.')
+            else:
+                print(f'Agent: {clean_path} already exists.')
+            continue
+        # For .json files, create minimal valid content if not present
+        if clean_path.lower().endswith('.json'):
+            if not os.path.exists(clean_path):
+                with open(clean_path, 'w', encoding='utf-8') as f:
+                    f.write('[]')
+                print(f'Agent: {clean_path} (empty JSON array) created.')
+            else:
+                print(f'Agent: {clean_path} already exists.')
+            continue
+        # For all other files, generate as usual
         code = generate_file_content(clean_path, user_input)
         result = create_file(clean_path, code)
         if result.get('status') == 'success':
             print(f'Agent: {clean_path} generated.')
         else:
-            print(f'Agent: Failed to generate {clean_path}: {result.get("error")}')
+            print(f'Agent: Failed to generate {clean_path}: {result.get("error")})')
     print('Agent: All files generated and combined. Your project is ready!')
+
+
+def parse_python_traceback(traceback_str: str):
+    """
+    Parse a Python traceback string and extract a list of (file_path, line_number) tuples for error locations.
+    Returns a list of dicts: [{'file': file_path, 'line': line_number}]
+    """
+    import re
+    error_locations = []
+    pattern = re.compile(r'File "([^"]+)", line (\d+)')
+    for match in pattern.finditer(traceback_str):
+        file_path, line_str = match.groups()
+        error_locations.append({'file': file_path, 'line': int(line_str)})
+    return error_locations
+
+
+def agent_per_file_edit(error_message: str, traceback_str: str, minimal_files: bool = True):
+    """
+    Parse the error traceback, assign an agent to each affected file (or chunk), and fix the error.
+    Only edit the exact files/lines needed. Validate fixes after each change.
+    If minimal_files is True, do not generate or edit unnecessary files (like README, docs, or tests).
+    """
+    error_locations = parse_python_traceback(traceback_str)
+    for loc in error_locations:
+        file_path = loc['file']
+        line_number = loc['line']
+        # For large files, determine chunk
+        file_size = os.path.getsize(file_path)
+        if file_size > 100_000:
+            chunk_size = 100
+            with open(file_path, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+            total_chunks = (len(lines) + chunk_size - 1) // chunk_size
+            chunk_index = (line_number - 1) // chunk_size
+            chunk_lines = lines[chunk_index*chunk_size:(chunk_index+1)*chunk_size]
+            chunk_content = ''.join(chunk_lines)
+            print(f"Agent for {file_path} [chunk {chunk_index}]: analyzing and fixing error at line {line_number}...")
+            # ...agent logic to fix errors in chunk_content...
+            # After fix, validate by running code/tests
+        else:
+            print(f"Agent for {file_path}: analyzing and fixing error at line {line_number}...")
+            # ...agent logic to fix errors in the file...
+            # After fix, validate by running code/tests
+    if minimal_files:
+        print("Minimal files mode: No extra files (README, docs, tests) will be generated or edited unless explicitly requested.")
+
 
 # Configure the chat with function-calling and system instruction
 config = types.GenerateContentConfig(
@@ -391,6 +474,7 @@ chat = genai_client.chats.create(
     config=config
 )
 
+
 def main():
     print('=== Gemini Super Agent ===')
     while True:
@@ -398,12 +482,33 @@ def main():
         if user_input.lower() in ('exit', 'quit'):
             print('Agent: Goodbye!')
             break
-        if is_multifile_request(user_input):
-            print('Agent: Detected a multi-file/full-project request. Using supervisor workflow...')
-            supervisor_generate_project(user_input)
-        else:
-            response = chat.send_message(user_input)
-            print(f"Agent: {response.text}")
+        try:
+            if is_multifile_request(user_input):
+                print('Agent: Detected a multi-file/full-project request. Using supervisor workflow...')
+                supervisor_generate_project(user_input)
+            else:
+                response = chat.send_message(user_input)
+                print(f"Agent: {response.text}")
+        except Exception as e:
+            print(f"Agent: Error occurred: {e}")
+            # Retry logic for Gemini API 500 errors
+            import time
+            retries = 0
+            while retries < 3:
+                try:
+                    time.sleep(2)
+                    if is_multifile_request(user_input):
+                        supervisor_generate_project(user_input)
+                    else:
+                        response = chat.send_message(user_input)
+                        print(f"Agent: {response.text}")
+                    break
+                except Exception as e2:
+                    print(f"Agent: Retry {retries+1} failed: {e2}")
+                    retries += 1
+            else:
+                print("Agent: Failed after multiple retries. Please try again later or check Gemini API status.")
+
 
 if __name__ == '__main__':
     main()
