@@ -3,151 +3,27 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Interactive Neural Network Simulator</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/network-visualization.css') }}">
-    <script src="https://d3js.org/d3.v7.min.js"></script> <!-- Include D3.js for visualization -->
+    <title>Quirky Excuse Generator</title>
+    <link rel="stylesheet" href="../static/css/style.css"> <!-- Corrected path -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Gaegu:wght@300;400;700&display=swap" rel="stylesheet">
 </head>
 <body>
-    <header>
-        <h1>Interactive Neural Network Simulator</h1>
-    </header>
+    <div class="container">
+        <h1>Running Late Again?</h1>
+        <p class="subtitle">Fear not! Grab a hilariously unbelievable excuse:</p>
+        <div class="excuse-box">
+            <p id="excuse-display">My pet rock needed emergency polishing.</p>
+        </div>
+        <div class="button-group">
+            <button id="generate-btn">Get New Excuse!</button>
+            <button id="copy-btn">Copy Excuse</button>
+            <button id="share-btn">Share (Twitter)</button>
+        </div>
+        <p id="copy-feedback" class="feedback"></p>
+    </div>
 
-    <main class="container">
-        <section id="config-section" class="card">
-            <h2>Network Configuration</h2>
-            <div class="layer-config" id="input-layer-config">
-                <label>Input Layer Nodes:</label>
-                <input type="number" id="input-nodes" value="2" min="1">
-                <span>(Activation: None)</span>
-            </div>
-
-            <div id="hidden-layers-config">
-                <h3>Hidden Layers</h3>
-                <div id="hidden-layers-list">
-                    <!-- Hidden layer configurations will be added here -->
-                    <div class="layer-config hidden-layer" data-layer-index="1">
-                        <label>Layer 1 Nodes:</label>
-                        <input type="number" class="hidden-nodes" value="3" min="1">
-                        <label>Activation:</label>
-                        <select class="hidden-activation">
-                            {% for func in activation_functions %}
-                            <option value="{{ func }}" {% if func == 'relu' %}selected{% endif %}>{{ func|upper }}</option>
-                            {% endfor %}
-                        </select>
-                        <button class="remove-layer-btn" onclick="removeLayer(this)">Remove</button>
-                    </div>
-                </div>
-                <button id="add-layer-btn">Add Hidden Layer</button>
-            </div>
-
-            <div class="layer-config" id="output-layer-config">
-                <label>Output Layer Nodes:</label>
-                <input type="number" id="output-nodes" value="1" min="1">
-                <label>Activation:</label>
-                <select id="output-activation">
-                    {% for func in activation_functions %}
-                    <option value="{{ func }}" {% if func == 'sigmoid' %}selected{% endif %}>{{ func|upper }}</option>
-                    {% endfor %}
-                </select>
-            </div>
-
-            <button id="initialize-btn">Initialize Network</button>
-            <p id="config-error" class="error-message"></p>
-        </section>
-
-        <section id="visualization-section" class="card">
-            <h2>Network Visualization</h2>
-            <div id="network-visualization-container">
-                 <svg id="network-svg"></svg>
-            </div>
-             <div id="visualization-controls">
-                <label><input type="checkbox" id="show-weights-biases" checked> Show Weights/Biases</label>
-                <label><input type="checkbox" id="show-activations-logits" checked> Show Activations/Logits</label>
-            </div>
-            <p class="tooltip-info">Hover over nodes and connections for details.</p>
-        </section>
-
-        <section id="simulation-section" class="card">
-            <h2>Simulation Control</h2>
-            <div class="simulation-input">
-                <label for="input-data">Input Data (comma-separated):</label>
-                <textarea id="input-data" rows="2">0.8, -0.2</textarea>
-            </div>
-            <div class="simulation-input">
-                <label for="target-data">Target Data (comma-separated):</label>
-                <textarea id="target-data" rows="2">0.95</textarea>
-            </div>
-             <div class="simulation-input">
-                <label for="learning-rate">Learning Rate:</label>
-                <input type="number" id="learning-rate" value="0.1" step="0.01" min="0.001">
-            </div>
-            <button id="forward-pass-btn" disabled>Run Forward Pass</button>
-            <button id="backward-pass-btn" disabled>Run Backward Pass</button>
-            <p id="simulation-error" class="error-message"></p>
-            <p id="simulation-status" class="status-message"></p>
-        </section>
-
-        <section id="results-section" class="card">
-            <h2>Simulation Results</h2>
-            <div class="results-grid">
-                <div id="forward-pass-results">
-                    <h3>Forward Pass</h3>
-                    <div class="result-item">
-                        <strong>Layer Outputs (Activations):</strong>
-                        <pre id="layer-outputs-display"></pre>
-                    </div>
-                     <div class="result-item">
-                        <strong>Layer Logits (Pre-activation):</strong>
-                        <pre id="layer-logits-display"></pre>
-                    </div>
-                    <div class="result-item">
-                        <strong>Final Output:</strong>
-                        <pre id="final-output-display"></pre>
-                    </div>
-                </div>
-                <div id="backward-pass-results">
-                    <h3>Backward Pass</h3>
-                     <div class="result-item">
-                        <strong>Error Signals (dL/dA):</strong>
-                        <pre id="delta-activations-display"></pre>
-                    </div>
-                    <div class="result-item">
-                        <strong>Weight Gradients (dL/dW):</strong>
-                        <pre id="gradients-w-display"></pre>
-                    </div>
-                    <div class="result-item">
-                        <strong>Bias Gradients (dL/db):</strong>
-                        <pre id="gradients-b-display"></pre>
-                    </div>
-                    <div class="result-item">
-                        <strong>Updated Weights:</strong>
-                        <pre id="updated-weights-display"></pre>
-                    </div>
-                     <div class="result-item">
-                        <strong>Updated Biases:</strong>
-                        <pre id="updated-biases-display"></pre>
-                    </div>
-                </div>
-            </div>
-        </section>
-    </main>
-
-    <footer>
-        <p>Neural Network Simulator</p>
-    </footer>
-
-    <!-- Activation function template for adding new hidden layers -->
-    <template id="activation-select-template">
-        <select class="hidden-activation">
-            {% for func in activation_functions %}
-            <option value="{{ func }}">{{ func|upper }}</option>
-            {% endfor %}
-        </select>
-    </template>
-
-    <script src="{{ url_for('static', filename='js/network-visualization.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/simulation.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/script.js') }}"></script>
+    <script src="../static/js/script.js"></script> <!-- Corrected path -->
 </body>
 </html>
