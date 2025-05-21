@@ -2,19 +2,52 @@ import os
 import subprocess
 import sys
 import platform
-import shutil
-import webbrowser
-import re
-import time
+import shutil # Used by shutil.rmtree indirectly via env_utils, but not directly in main.py
+import webbrowser # Used by env_utils.open_in_browser
+import re # Used in strip_code_block_markers and _generate_project_files
+import time # Used in GeminiClient and main loop
 import logging
-from typing import Any, Dict, List, Optional, Union
-from pathlib import Path
-from dataclasses import dataclass
-from concurrent.futures import ThreadPoolExecutor
-import queue
-from datetime import datetime, timedelta
+from typing import Any, Dict, List, Optional, Union # Union might be unused
+from pathlib import Path # Used in supervisor_generate_project's helpers
+# from dataclasses import dataclass # No longer used in main.py
+# from concurrent.futures import ThreadPoolExecutor # Not used
+import queue # Used by TokenBucket
+from datetime import datetime, timedelta # Used by TokenBucket
 from google import genai
 from google.genai import types
+
+# Import file utility functions
+import file_utils # For tools used in GeminiClient
+from file_utils import OperationResult, verify_file_content # verify_file_content was moved here
+# Note: Other specific file_utils functions are called as file_utils.function_name
+
+# Import environment and process utility functions
+import env_utils # For tools used in GeminiClient
+# Note: Specific env_utils functions are called as env_utils.function_name
+# No direct calls to env_utils functions from main.py's global scope currently,
+# so the broad `from env_utils import ...` is not strictly necessary here if GeminiClient handles all.
+# However, keeping it doesn't harm and allows flexibility if main were to call them.
+from env_utils import (
+    # run_script, # Example: if main were to call these directly
+    # start_interactive,
+    # install_package,
+    # open_in_browser,
+    # lint_code,
+    # format_code,
+    # run_tests,
+    # git_commit,
+    # git_push
+) # Emptying this as no direct calls from main's scope. GeminiClient uses env_utils.func_name
+
+# Configure logging
+logging.basicConfig(
+    open_in_browser,
+    lint_code,
+    format_code,
+    run_tests,
+    git_commit,
+    git_push
+)
 
 # Configure logging
 logging.basicConfig(
@@ -72,43 +105,80 @@ class GeminiClient:
         self.chat = None
 
     def create_chat(self):
-        """Create a new chat session."""
-        config = types.GenerateContentConfig(
-            tools=[
-                create_file, read_file, update_file, delete_file, rename_file, move_file,
-                list_directory, search_file, run_script, start_interactive, install_package,
-                open_in_browser, lint_code, format_code, run_tests, git_commit, git_push, prompt_input,
-                chunk_file, update_file_chunk
-            ],
-            temperature=0,
-            system_instruction=SYSTEM_PROMPT
-        )
-        self.chat = self.client.chats.create(
-            model='models/gemini-2.5-flash-preview-04-17',
-            config=config
-        )
+        """Create a new chat session, handling potential errors."""
+        logger.info("Attempting to create a new chat session.")
+        try:
+            config = types.GenerateContentConfig(
+                tools=[
+                    file_utils.create_file, file_utils.read_file, file_utils.update_file,
+                    file_utils.delete_file, file_utils.rename_file, file_utils.move_file,
+                    file_utils.list_directory, file_utils.search_file,
+                    file_utils.chunk_file, file_utils.update_file_chunk, # chunk_file is now in file_utils
+                    env_utils.run_script, env_utils.start_interactive, env_utils.install_package,
+                    env_utils.open_in_browser, env_utils.lint_code, env_utils.format_code,
+                    env_utils.run_tests, env_utils.git_commit, env_utils.git_push,
+                    prompt_input  # Assuming prompt_input remains in main.py or is imported
+                ],
+                temperature=0,
+                system_instruction=SYSTEM_PROMPT
+            )
+            self.chat = self.client.chats.create(
+                model='models/gemini-2.5-flash-preview-04-17', # Consider making model configurable
+                config=config
+            )
+            logger.info("Successfully created a new chat session.")
+        except Exception as e:
+            logger.error(f"Failed to create chat session: {str(e)}", exc_info=True)
+            # Depending on the error, self.chat might be None or in an invalid state.
+            # The caller (send_message) should handle this.
+            self.chat = None # Ensure chat is None if creation fails
+            raise # Re-raise the exception so send_message knows creation failed
 
     def send_message(self, message: str, max_tokens: int = 1000) -> Optional[str]:
         """Send message with rate limiting and retry logic."""
         if not self.chat:
-            self.create_chat()
-            
+            try:
+                self.create_chat()
+            except Exception as e: # Catch errors from create_chat
+                logger.error(f"Failed to initialize chat for send_message due to: {str(e)}")
+                return None # Or raise, depending on desired behavior for critical chat init failure
+
+        # If chat is still None after attempting creation, means create_chat failed critically.
+        if not self.chat:
+             logger.error("Chat session is not available. Cannot send message.")
+             return None
+
         for attempt in range(self.max_retries):
+            logger.info(f"Attempt {attempt + 1} of {self.max_retries} to send message.")
             if not self.token_bucket.consume(max_tokens):
+                logger.warning(f"Rate limit exceeded. Waiting for {self.retry_delay} seconds before retrying.")
                 time.sleep(self.retry_delay)
                 continue
             
             try:
                 response = self.chat.send_message(message)
+                logger.info("Message sent and response received successfully.")
                 return response.text
             except Exception as e:
-                logger.error(f"Attempt {attempt + 1} failed: {str(e)}")
+                logger.error(f"Attempt {attempt + 1} to send message failed: {str(e)}", exc_info=True)
                 if attempt < self.max_retries - 1:
+                    logger.info(f"Retrying in {self.retry_delay} seconds...")
                     time.sleep(self.retry_delay)
-                    # Recreate chat session on failure
-                    self.create_chat()
+                    # Recreate chat session on failure as a recovery strategy
+                    try:
+                        logger.info("Attempting to recreate chat session due to send error.")
+                        self.create_chat()
+                        if not self.chat: # If chat creation failed again
+                            logger.error("Failed to recreate chat session. Aborting retries for this message.")
+                            return None # Or raise specific error
+                    except Exception as ce:
+                        logger.error(f"Critical error during chat recreation: {str(ce)}. Aborting retries.")
+                        return None # Or raise
                 else:
-                    raise
+                    logger.error("Maximum retries reached. Failed to send message.")
+                    # Not raising the exception here to allow the application to continue if desired.
+                    # Depending on requirements, `raise` could be used.
+                    return None # Indicate failure after max retries
 
 # Initialize Gemini client with rate limiting
 api_key = os.getenv("GOOGLE_API_KEY")
@@ -118,342 +188,111 @@ genai_client = GeminiClient(api_key=api_key)
 
 # System prompt with token optimization
 SYSTEM_PROMPT = (
-    "You are a supercharged coding agent with full filesystem and Git integration. "
-    "Automatically infer and create directories for file operations. "
-    "For web projects, place HTML in 'templates/' and assets in 'static/css/', 'static/js/', 'static/images/'. "
-    "Support linting, formatting, testing, and version control (Git). "
-    "Detach long-running servers so the chat loop remains responsive. "
-    "Use 'run_script' to capture output for non-interactive scripts, and 'start_interactive' for scripts requiring user input. "
-    "Use 'open_in_browser' for quick HTML previews. "
-    "Never use main.py, README.md, and requirements.txt files to write any code and never delete them in current directory. "
-    "Create new files only within subdirectories."
+    "You are a coding agent with filesystem access and Git integration. "
+    "Manage files and directories, ensuring web project assets (HTML, CSS, JS) are in 'templates/' and 'static/' respectively. "
+    "Utilize tools for linting, formatting, testing, and version control (Git). "
+    "Run scripts non-interactively (capturing output) or interactively. Detach long-running servers. "
+    "Preview HTML using a browser. Avoid modifying 'main.py', 'README.md', 'requirements.txt'. Create new files in subdirectories."
 )
 
-@dataclass
-class OperationResult:
-    """Standardized operation result structure."""
-    success: bool
-    data: Optional[Any] = None
-    error: Optional[str] = None
-    status_code: int = 200
-
-def safe_file_operation(path: str) -> Optional[Path]:
-    """Safely resolve and validate file paths."""
-    try:
-        safe_path = Path(path).resolve()
-        base_path = Path.cwd().resolve()
-        if base_path in safe_path.parents:
-            return safe_path
-        return None
-    except (ValueError, RuntimeError):
-        return None
-
-def create_file(path: str, content: str) -> OperationResult:
-    """Create or overwrite a file, auto-creating parent directories."""
-    try:
-        safe_path = safe_file_operation(path)
-        if not safe_path:
-            return OperationResult(False, error="Invalid path", status_code=400)
-            
-        dirpath = safe_path.parent
-        if dirpath:
-            os.makedirs(dirpath, exist_ok=True)
-            
-        with open(safe_path, 'w', encoding='utf-8') as f:
-            f.write(content)
-        return OperationResult(True, data={'path': str(safe_path)})
-    except Exception as e:
-        logger.error(f"Error creating file {path}: {str(e)}")
-        return OperationResult(False, error=str(e), status_code=500)
-
-def read_file(path: str) -> OperationResult:
-    """Read and return the content of a file."""
-    try:
-        safe_path = safe_file_operation(path)
-        if not safe_path:
-            return OperationResult(False, error="Invalid path", status_code=400)
-            
-        with open(safe_path, 'r', encoding='utf-8') as f:
-            data = f.read()
-        return OperationResult(True, data={'content': data})
-    except Exception as e:
-        logger.error(f"Error reading file {path}: {str(e)}")
-        return OperationResult(False, error=str(e), status_code=500)
-
-def update_file(path: str, content: str) -> Dict[str, Any]:
-    """Alias for create_file."""
-    return create_file(path, content)
-
-def delete_file(path: str) -> Dict[str, Any]:
-    """Delete a file or directory at the given path, handling permission issues."""
-    def onerror(func, fn, excinfo):
-        try:
-            os.chmod(fn, 0o666)
-            func(fn)
-        except Exception:
-            pass
-    try:
-        if os.path.isdir(path):
-            shutil.rmtree(path, onerror=onerror)
-            return {'status': 'deleted_directory', 'path': path}
-        else:
-            os.remove(path)
-            return {'status': 'deleted_file', 'path': path}
-    except FileNotFoundError:
-        return {'status': 'error', 'error': 'path not found'}
-    except Exception as e:
-        return {'status': 'error', 'error': str(e)}
-
-def rename_file(old_path: str, new_path: str) -> Dict[str, Any]:
-    """Rename a file or directory."""
-    try:
-        dirpath = os.path.dirname(new_path)
-        if dirpath:
-            os.makedirs(dirpath, exist_ok=True)
-        os.rename(old_path, new_path)
-        return {'status': 'renamed', 'from': old_path, 'to': new_path}
-    except Exception as e:
-        return {'status': 'error', 'error': str(e)}
-
-def move_file(src: str, dest: str) -> Dict[str, Any]:
-    """Move a file or directory."""
-    try:
-        dirpath = os.path.dirname(dest)
-        if dirpath:
-            os.makedirs(dirpath, exist_ok=True)
-        shutil.move(src, dest)
-        return {'status': 'moved', 'from': src, 'to': dest}
-    except Exception as e:
-        return {'status': 'error', 'error': str(e)}
-
-def list_directory(path: str) -> Dict[str, Any]:
-    """List files and directories at a given path."""
-    try:
-        items = os.listdir(path)
-        return {'status': 'success', 'path': path, 'items': items}
-    except Exception as e:
-        return {'status': 'error', 'error': str(e)}
-
-def search_file(keyword: str, path: str) -> Dict[str, Any]:
-    """Search for a keyword in files under the given path."""
-    matches: List[str] = []
-    for root, _, files in os.walk(path):
-        for file in files:
-            try:
-                with open(os.path.join(root, file), 'r', encoding='utf-8') as f:
-                    if keyword in f.read():
-                        matches.append(os.path.join(root, file))
-            except:
-                continue
-    return {'status': 'success', 'matches': matches}
-
-def run_script(path: str) -> Dict[str, Any]:
-    """Run a non-interactive script, capturing stdout and stderr."""
-    try:
-        result = subprocess.run([sys.executable, path], capture_output=True, text=True)
-        return {'status': 'completed', 'exit_code': result.returncode, 'stdout': result.stdout, 'stderr': result.stderr}
-    except Exception as e:
-        return {'status': 'error', 'error': str(e)}
-
-def start_interactive(path: str) -> Dict[str, Any]:
-    """Launch a script in a new console for interactive input."""
-    try:
-        kwargs = {}
-        if platform.system() == 'Windows' and hasattr(subprocess, 'CREATE_NEW_CONSOLE'):
-            kwargs['creationflags'] = subprocess.CREATE_NEW_CONSOLE
-        else:
-            kwargs['start_new_session'] = True
-        proc = subprocess.Popen([sys.executable, path], **kwargs)
-        return {'status': 'started', 'pid': proc.pid}
-    except Exception as e:
-        return {'status': 'error', 'error': str(e)}
-
-def install_package(package: str) -> Dict[str, Any]:
-    """Install a Python package via pip."""
-    try:
-        result = subprocess.run(
-            [sys.executable, '-m', 'pip', 'install', package],
-            capture_output=True,
-            text=True
-        )
-        return {
-            'status': 'completed',
-            'stdout': result.stdout,
-            'stderr': result.stderr,
-            'exit_code': result.returncode
-        }
-    except Exception as e:
-        return {'status': 'error', 'error': str(e)}
-
-def open_in_browser(path: str) -> Dict[str, Any]:
-    """Open a file or URL in the default web browser for preview."""
-    try:
-        url = path if path.startswith('http') else f'file://{os.path.abspath(path)}'
-        webbrowser.open(url)
-        return {'status': 'opened', 'url': url}
-    except Exception as e:
-        return {'status': 'error', 'error': str(e)}
-
-def lint_code(path: str) -> Dict[str, Any]:
-    """Run flake8 linter on the given file or directory."""
-    try:
-        result = subprocess.run(['flake8', path], capture_output=True, text=True)
-        return {'status': 'completed', 'stdout': result.stdout, 'stderr': result.stderr}
-    except Exception as e:
-        return {'status': 'error', 'error': str(e)}
-
-def format_code(path: str) -> Dict[str, Any]:
-    """Format code using black on the given file or directory."""
-    try:
-        result = subprocess.run(['black', path], capture_output=True, text=True)
-        return {'status': 'formatted', 'stdout': result.stdout, 'stderr': result.stderr}
-    except Exception as e:
-        return {'status': 'error', 'error': str(e)}
-
-def run_tests(path: str) -> Dict[str, Any]:
-    """Run pytest on the specified directory."""
-    try:
-        result = subprocess.run(['pytest', path], capture_output=True, text=True)
-        return {'status': 'completed', 'stdout': result.stdout, 'stderr': result.stderr}
-    except Exception as e:
-        return {'status': 'error', 'error': str(e)}
-
-def git_commit(message: str) -> Dict[str, Any]:
-    """Commit staged changes with a commit message."""
-    try:
-        subprocess.run(['git', 'add', '.'], check=True)
-        result = subprocess.run(['git', 'commit', '-m', message], capture_output=True, text=True)
-        return {'status': 'committed', 'stdout': result.stdout, 'stderr': result.stderr}
-    except Exception as e:
-        return {'status': 'error', 'error': str(e)}
-
-def git_push(remote: str, branch: str) -> Dict[str, Any]:
-    """Push commits to the remote repository."""
-    try:
-        result = subprocess.run(['git', 'push', remote, branch], capture_output=True, text=True)
-        return {'status': 'pushed', 'stdout': result.stdout, 'stderr': result.stderr}
-    except Exception as e:
-        return {'status': 'error', 'error': str(e)}
+# @dataclass
+# class OperationResult: # This definition is now removed, using the one from file_utils.py
+#     """Standardized operation result structure."""
+#     success: bool
+#     data: Optional[Any] = None
+#     error: Optional[str] = None
+#     status_code: int = 200
 
 def prompt_input(message: str) -> Dict[str, Any]:
     """Prompt the user and return the input."""
     val = input(f"{message} ")
     return {'user_input': val}
 
-def chunk_file(path: str, chunk_size: int, chunk_index: int) -> Dict[str, Any]:
-    """Read a file in chunks (line-based, memory efficient, resumable, robust for huge files). Returns the specified chunk (0-based)."""
-    if chunk_size is None:
-        chunk_size = 100
-    if chunk_index is None:
-        chunk_index = 0
-    try:
-        total_lines = 0
-        chunk_lines = []
-        start = chunk_index * chunk_size
-        end = start + chunk_size
-        with open(path, 'r', encoding='utf-8') as f:
-            for i, line in enumerate(f):
-                if i >= start and i < end:
-                    chunk_lines.append(line)
-                total_lines += 1
-        total_chunks = (total_lines + chunk_size - 1) // chunk_size
-        if chunk_index < 0 or chunk_index >= total_chunks:
-            return {'status': 'error', 'error': 'chunk_index out of range', 'total_chunks': total_chunks}
-        chunk = ''.join(chunk_lines)
-        return {
-            'status': 'success',
-            'chunk_index': chunk_index,
-            'total_chunks': total_chunks,
-            'chunk': chunk,
-            'start_line': start,
-            'end_line': min(end, total_lines) - 1
-        }
-    except Exception as e:
-        return {'status': 'error', 'error': str(e)}
-
-def update_file_chunk(path: str, chunk_content: str, chunk_size: int, chunk_index: int) -> Dict[str, Any]:
-    """Update a specific chunk of a file (0-based, memory efficient, robust for huge files)."""
-    if chunk_size is None:
-        chunk_size = 100
-    if chunk_index is None:
-        chunk_index = 0
-    try:
-        temp_path = path + '.tmp'
-        start = chunk_index * chunk_size
-        end = start + chunk_size
-        total_lines = 0
-        written_lines = 0
-        chunk_lines = chunk_content.splitlines(keepends=True)
-        with open(path, 'r', encoding='utf-8') as src, open(temp_path, 'w', encoding='utf-8') as dst:
-            for i, line in enumerate(src):
-                if i == start:
-                    for cl in chunk_lines:
-                        dst.write(cl)
-                        written_lines += 1
-                if i < start or i >= end:
-                    dst.write(line)
-                total_lines += 1
-            # If chunk is appended at the end
-            if start >= total_lines:
-                for cl in chunk_lines:
-                    dst.write(cl)
-                    written_lines += 1
-        os.replace(temp_path, path)
-        total_chunks = (total_lines + chunk_size - 1) // chunk_size
-        if start >= total_lines:
-            total_chunks = (start + written_lines + chunk_size - 1) // chunk_size
-        return {'status': 'success', 'chunk_index': chunk_index, 'total_chunks': total_chunks}
-    except Exception as e:
-        return {'status': 'error', 'error': str(e)}
+# chunk_file function was moved to file_utils.py
 
 def is_multifile_request(user_input: str) -> bool:
-    """Detect if the user is requesting a multi-file or full project generation or edit."""
-    # Exclude generic run/test/output commands
+    """
+    Detect if the user is requesting a multi-file or full project generation or edit.
+    This function uses a keyword-based approach. For more complex scenarios,
+    NLP or more sophisticated pattern matching might be considered.
+    """
+    # Exclude generic run/test/output commands to avoid false positives
     generic_run_phrases = [
-        'run', 'run the code', 'execute', 'start', 'test', 'show output', 'output', 'show result', 'show results', 'print', 'print output', 'print result', 'print results', 'display', 'display output', 'display result', 'display results', 'launch', 'open', 'open app', 'open project', 'open file', 'open folder', 'open directory', 'open website', 'open page', 'preview', 'preview app', 'preview project', 'preview file', 'preview folder', 'preview directory', 'preview website', 'preview page', 'just run', 'just execute', 'just test', 'just show', 'just print', 'just display', 'just open', 'just preview', 'run main', 'run main.py', 'run app', 'run app.py', 'run script', 'run program', 'run project', 'run this', 'run it', 'run all', 'run everything', 'run my code', 'run my project', 'run my app', 'run my script', 'run my program', 'run my file', 'run my folder', 'run my directory', 'run my website', 'run my page', 'run my preview', 'run my output', 'run my result', 'run my results', 'run my print', 'run my display', 'run my launch', 'run my open', 'run my preview', 'run code', 'run codes', 'run all code', 'run all codes', 'run all files', 'run all scripts', 'run all programs', 'run all projects', 'run all apps', 'run all websites', 'run all pages', 'run all previews', 'run all outputs', 'run all results', 'run all prints', 'run all displays', 'run all launches', 'run all opens', 'run all previews', 'run everything', 'run anything', 'run something', 'run nothing', 'run whatever', 'run whichever', 'run whichever code', 'run whichever file', 'run whichever script', 'run whichever program', 'run whichever project', 'run whichever app', 'run whichever website', 'run whichever page', 'run whichever preview', 'run whichever output', 'run whichever result', 'run whichever results', 'run whichever print', 'run whichever display', 'run whichever launch', 'run whichever open', 'run whichever preview', 'run whichever main', 'run whichever main.py', 'run whichever app', 'run whichever app.py', 'run whichever script', 'run whichever program', 'run whichever project', 'run whichever file', 'run whichever folder', 'run whichever directory', 'run whichever website', 'run whichever page', 'run whichever preview', 'run whichever output', 'run whichever result', 'run whichever results', 'run whichever print', 'run whichever display', 'run whichever launch', 'run whichever open', 'run whichever preview',
+        'run', 'run the code', 'execute', 'start', 'test', 'show output', 'output', 
+        'show result', 'show results', 'print', 'print output', 'print result', 'print results', 
+        'display', 'display output', 'display result', 'display results', 'launch', 'open', 
+        'open app', 'open project', 'open file', 'open folder', 'open directory', 
+        'open website', 'open page', 'preview', 'preview app', 'preview project', 
+        'preview file', 'preview folder', 'preview directory', 'preview website', 'preview page',
+        # Simplified "just run..." type phrases
+        'just run', 'just execute', 'just test', 'just show', 'just print', 'just display', 
+        'just open', 'just preview',
+        # Simplified "run main/app..." type phrases
+        'run main', 'run main.py', 'run app', 'run app.py', 'run script', 'run program', 'run project',
+        'run this', 'run it', 'run all', 'run everything',
+        # Simplified "run my..." type phrases
+        'run my code', 'run my project', 'run my app', 'run my script', 'run my program',
+        # Simplified "run all..." type phrases
+        'run all code', 'run all files', 'run all scripts', 'run all programs', 'run all projects',
+        # Simplified "run whichever..." type phrases
+        'run whichever code', 'run whichever file', 'run whichever script', 'run whichever program'
     ]
-    if any(phrase == user_input.strip().lower() for phrase in generic_run_phrases):
+    # Convert user input to lowercase and strip whitespace for robust comparison
+    normalized_input = user_input.strip().lower()
+    if any(phrase == normalized_input for phrase in generic_run_phrases):
         return False
-    # Only trigger for clear project/file structure creation or multi-file edit requests
-    keywords = [
-        'full stack', 'full project', 'all files', 'create all', 'generate all',
-        'multiple files', 'folders', 'structure', 'backend and frontend', 'full code', 'ready to deploy', 'not just a prototype',
-        'folder', 'website', 'project', 'app', 'dashboard', 'study plan', 'resources', 'path', 'daily', 'monthly', 'test', 'quiz', 'assignment', 'deploy', 'ui', 'single user', 'multi-file', 'multi file', 'multi-project', 'multi project', 'subdirectory', 'subdirectories', 'sub-folder', 'subfolders', 'subfolder', 'subfolders', 'plan', 'progress', 'graph', 'graphs', 'track', 'tracking', 'visualize', 'visualization', 'visualisations', 'visualisation', 'visual', 'modern', 'production-ready', 'production ready', 'deploy-ready', 'deploy ready', 'no placeholders', 'fully implemented', 'end-to-end', 'end to end', 'comprehensive', 'complete', 'study', 'studies', 'fix all errors', 'fix errors in all files', 'fix errors in project', 'fix errors in codebase', 'fix errors in all code', 'edit all files', 'edit all', 'edit project', 'edit codebase', 'edit everything', 'edit the whole project', 'edit the entire project', 'edit the whole codebase', 'edit the entire codebase', 'edit the whole app', 'edit the entire app', 'edit the whole website', 'edit the entire website', 'edit the whole folder', 'edit the entire folder', 'edit the whole directory', 'edit the entire directory', 'edit the whole file', 'edit the entire file', 'edit the whole script', 'edit the entire script', 'edit the whole program', 'edit the entire program', 'edit the whole preview', 'edit the entire preview', 'edit the whole output', 'edit the entire output', 'edit the whole result', 'edit the entire result', 'edit the whole results', 'edit the entire results', 'edit the whole print', 'edit the entire print', 'edit the whole display', 'edit the entire display', 'edit the whole launch', 'edit the entire launch', 'edit the whole open', 'edit the entire open', 'edit the whole preview', 'edit the entire preview',
+        
+    # Keywords that strongly indicate a multi-file or project-level request.
+    # This list can be expanded or refined.
+    project_keywords = [
+        'full stack', 'full project', 'all files', 'create all', 'generate all', 
+        'multiple files', 'folders', 'structure', 'backend and frontend', 'full code', 
+        'ready to deploy', 'not just a prototype', 'folder', 'website', 'project', 'app', 
+        'dashboard', 'study plan', 'resources', 'path', 'daily', 'monthly', 'test', 'quiz', 
+        'assignment', 'deploy', 'ui', 'single user', 'multi-file', 'multi file', 
+        'multi-project', 'multi project', 'subdirectory', 'subdirectories', 'sub-folder', 
+        'subfolders', 'subfolder', 'subfolders', 'plan', 'progress', 'graph', 'graphs', 
+        'track', 'tracking', 'visualize', 'visualization', 'visualisations', 'visualisation', 
+        'visual', 'modern', 'production-ready', 'production ready', 'deploy-ready', 
+        'deploy ready', 'no placeholders', 'fully implemented', 'end-to-end', 'end to end', 
+        'comprehensive', 'complete', 'study', 'studies',
+        # Keywords for editing multiple files or project-wide edits
+        'fix all errors', 'fix errors in all files', 'fix errors in project', 
+        'fix errors in codebase', 'fix errors in all code', 'edit all files', 'edit all', 
+        'edit project', 'edit codebase', 'edit everything', 'edit the whole project', 
+        'edit the entire project', 'edit the whole codebase', 'edit the entire codebase'
     ]
-    return any(k in user_input.lower() for k in keywords)
+    return any(keyword in normalized_input for keyword in project_keywords)
 
-def extract_file_list(user_input: str) -> list:
-    """Extract a list of files to generate from the user input. Simple heuristic for demo purposes."""
-    # You can improve this with NLP or prompt the user for confirmation
-    files = []
-    if 'backend' in user_input or 'flask' in user_input:
-        files.append('app.py')
-    if 'frontend' in user_input or 'html' in user_input:
-        files.append('templates/index.html')
-    if 'css' in user_input:
-        files.append('static/css/style.css')
-    if 'js' in user_input or 'javascript' in user_input:
-        files.append('static/js/script.js')
-    # Default for full stack
-    if not files:
-        files = ['app.py', 'templates/index.html', 'static/css/style.css', 'static/js/script.js']
-    return files
+# --- Project Generation Helper Functions ---
+# These functions support the supervisor_generate_project workflow.
 
 def strip_code_block_markers(text: str) -> str:
-    """Remove leading/trailing code block markers and clean up the content."""
+    """
+    Removes leading/trailing code block markers (e.g., ```python, ```) and
+    other markdown formatting from a string.
+
+    Args:
+        text: The input string, potentially with code block markers.
+
+    Returns:
+        The cleaned string without code block markers or common markdown.
+    """
+    if not isinstance(text, str):
+        return "" # Or raise TypeError
     # Remove all code block markers (```python, ```html, ```, etc.)
-    text = re.sub(r'^```[a-zA-Z0-9]*\s*', '', text.strip())
-    text = re.sub(r'```\s*$', '', text.strip())
+    processed_text = re.sub(r'^```[a-zA-Z0-9]*\s*', '', text.strip())
+    processed_text = re.sub(r'```\s*$', '', processed_text.strip())
     
-    # Remove any remaining markdown formatting
-    text = re.sub(r'^\s*`{3,}.*$', '', text, flags=re.MULTILINE)
-    text = re.sub(r'^\s*`{1,2}.*$', '', text, flags=re.MULTILINE)
+    # Remove any remaining markdown formatting (like single or double backticks if they are on their own lines)
+    # This is a simple heuristic and might need refinement for complex markdown.
+    processed_text = re.sub(r'^\s*`{1,3}.*`{1,3}\s*$', '', processed_text, flags=re.MULTILINE) # Full line backticks
     
-    # Remove any leading/trailing whitespace
-    text = text.strip()
+    # Remove any leading/trailing whitespace again after regex
+    processed_text = processed_text.strip()
     
     # Remove any empty lines at the start and end
-    lines = text.splitlines()
+    lines = processed_text.splitlines()
     while lines and not lines[0].strip():
         lines.pop(0)
     while lines and not lines[-1].strip():
@@ -462,237 +301,271 @@ def strip_code_block_markers(text: str) -> str:
     return '\n'.join(lines)
 
 def generate_file_content(file_path: str, user_input: str) -> str:
-    """Generate content for a file with improved code block handling and error checking."""
-    # Determine file type for better prompt
-    file_ext = os.path.splitext(file_path)[1].lower()
-    file_type = {
-        '.py': 'Python',
-        '.html': 'HTML',
-        '.css': 'CSS',
-        '.js': 'JavaScript',
-        '.json': 'JSON',
-        '.md': 'Markdown',
-        '.txt': 'Text',
-        '.sql': 'SQL'
-    }.get(file_ext, 'Text')
+    """
+    Generates content for a specific file using the Gemini client.
+    This function formulates a prompt to the AI to generate code/text for the given file path,
+    considering the overall user project description.
+
+    Args:
+        file_path: The relative path of the file for which to generate content (e.g., "src/app.py").
+        user_input: The original user prompt describing the project.
+
+    Returns:
+        A string containing the generated content for the file. Returns an empty string on error
+        or if no content is generated.
+    """
+    # Determine file type for better prompt context
+    file_ext = os.path.splitext(file_path)[1].lower() # Use os.path.splitext
+    # More comprehensive mapping of file extensions to types for better prompting
+    file_type_map = {
+        '.py': 'Python', '.html': 'HTML', '.css': 'CSS', '.js': 'JavaScript',
+        '.json': 'JSON', '.md': 'Markdown', '.txt': 'Text', '.sql': 'SQL',
+        '.xml': 'XML', '.yaml': 'YAML', '.yml': 'YAML', '.java': 'Java',
+        '.c': 'C', '.cpp': 'C++', '.h': 'C/C++ Header', '.cs': 'C#',
+        '.php': 'PHP', '.rb': 'Ruby', '.go': 'Go', '.rs': 'Rust', '.swift': 'Swift',
+        '.kt': 'Kotlin', '.ts': 'TypeScript', '.sh': 'Shell Script', '.pl': 'Perl'
+    }
+    file_type_description = file_type_map.get(file_ext, f"{file_ext} file" if file_ext else "Text")
     
+    # Refined prompt for content generation
     prompt = (
-        f"Generate the complete code for the file '{file_path}' as part of this project: {user_input}\n"
-        f"File type: {file_type}\n"
-        f"Requirements:\n"
-        f"1. Output only the raw code without any markdown formatting or code block markers\n"
-        f"2. Do not include any explanations or comments about the code\n"
-        f"3. Ensure proper indentation and formatting\n"
-        f"4. Include all necessary imports and dependencies\n"
-        f"5. Follow best practices for {file_type} files\n"
-        f"6. Make sure the code is complete and runnable"
+        f"Please generate the complete and production-ready code for the file named '{file_path}'.\n"
+        f"This file is part of a larger project described as: '{user_input}'.\n"
+        f"The file type is: {file_type_description}.\n"
+        f"Ensure the generated code is functional, follows best practices for {file_type_description}, "
+        f"and includes all necessary imports or dependencies within the code itself.\n"
+        f"Output only the raw code for '{file_path}'. Do not include any explanations, comments about the code generation process, or markdown code block markers."
     )
     
+    logger.info(f"Generating content for '{file_path}' using prompt (first 100 chars): {prompt[:100]}...")
     try:
-        response = genai_client.send_message(prompt, max_tokens=2000)
-        if response is None:
-            logger.error(f"Empty response received for {file_path}")
-            return ""
+        # Assuming genai_client is a globally available Gemini client instance
+        response_text = genai_client.send_message(prompt, max_tokens=4096) # Increased max_tokens
+        
+        if response_text is None:
+            logger.error(f"No response received from AI for {file_path} generation.")
+            return "" # Return empty string if no response
             
-        content = strip_code_block_markers(response)
-        if not content.strip():
-            logger.warning(f"Empty content generated for {file_path}")
-            return ""
+        # Clean the response to remove any surrounding explanations or markdown
+        cleaned_content = strip_code_block_markers(response_text)
+        
+        if not cleaned_content.strip():
+            logger.warning(f"Empty content generated for {file_path} after cleaning.")
+            # Optionally, try a fallback prompt or return a placeholder
+            return f"# Placeholder for {file_path} - AI returned empty content\n"
             
-        return content
+        logger.info(f"Successfully generated and cleaned content for {file_path}.")
+        return cleaned_content
     except Exception as e:
-        logger.error(f"Error generating content for {file_path}: {str(e)}")
-        return ""
+        logger.error(f"Error generating content for file '{file_path}': {str(e)}", exc_info=True)
+        return "" # Return empty string on error
 
-def get_file_plan(user_input: str) -> list:
-    """Ask Gemini to generate a file/folder plan for the project."""
+def get_file_plan(user_input: str) -> List[str]:
+    """
+    Asks the Gemini client to generate a file and folder plan for the project based on user input.
+    The expected output is a JSON array of relative file paths.
+
+    Args:
+        user_input: The user's description of the project.
+
+    Returns:
+        A list of strings, where each string is a relative file path.
+        Returns an empty list if the plan generation fails or the response is not as expected.
+    """
     plan_prompt = (
-        f"Given this project description, list all files and folders (with relative paths) needed. "
-        f"Output as a JSON array of file paths only, no explanations.\nProject description: {user_input}"
+        f"Based on the following project description, provide a comprehensive list of all files and folders "
+        f"(using relative paths like 'src/app.py' or 'static/css/style.css') necessary for the project.\n"
+        f"Output this list as a JSON array of strings. Each string should be a file path. Do not include any explanations or surrounding text.\n"
+        f"Project description: \"{user_input}\""
     )
-    response = genai_client.send_message(plan_prompt)
-    import json
-    try:
-        file_list = json.loads(response)
-        if isinstance(file_list, list):
-            return file_list
-    except Exception:
-        pass
-    # Fallback: try to extract file paths from text
-    return [line.strip('- ').strip() for line in response.splitlines() if '.' in line]
+    logger.info("Requesting file plan from AI...")
+    response = genai_client.send_message(plan_prompt, max_tokens=1024) # Max tokens for plan
+    
+    if not response:
+        logger.error("No response received from AI for file plan generation.")
+        return []
 
-def supervisor_generate_project(user_input: str):
-    """Generate project files with improved error handling and token management."""
-    logger.info('Generating file/folder plan...')
+    import json # Import json here as it's only used in this function
     try:
-        file_list = get_file_plan(user_input)
-        if not file_list:
-            logger.error("No files to generate in the plan")
-            return
+        # Attempt to strip markdown before parsing JSON, as AI might wrap JSON in ```json ... ```
+        cleaned_response = strip_code_block_markers(response)
+        file_list = json.loads(cleaned_response)
+        if isinstance(file_list, list) and all(isinstance(item, str) for item in file_list):
+            logger.info(f"Successfully parsed file plan: {file_list}")
+            return file_list
+        else:
+            logger.error(f"Parsed JSON is not a list of strings: {file_list}")
+            return []
+    except json.JSONDecodeError as e_json:
+        logger.error(f"JSONDecodeError parsing file plan: {e_json}. Response was: {response[:200]}...") # Log snippet
+        # Fallback: try to extract file paths from plain text if JSON parsing fails
+        logger.info("Attempting fallback to extract file paths from plain text response.")
+        extracted_paths = [line.strip('- ').strip() for line in response.splitlines() if '.' in line and not line.startswith("```")]
+        if extracted_paths:
+            logger.info(f"Fallback extraction found paths: {extracted_paths}")
+            return extracted_paths
+        return []
+    except Exception as e: # Catch any other unexpected errors
+        logger.error(f"Unexpected error parsing file plan: {e}", exc_info=True)
+        return []
+
+
+def _get_project_file_list(user_input: str) -> List[str]:
+    """
+    Gets the initial list of files for the project based on user input.
+    Calls get_file_plan and performs basic validation.
+    """
+    logger.info('Getting project file list...')
+    try:
+        file_list = get_file_plan(user_input) # get_file_plan is already defined in main.py
+        if not file_list or not isinstance(file_list, list):
+            logger.error("No files to generate in the plan or plan is not a list.")
+            return []
+        logger.info(f'Initial file plan: {file_list}')
+        return file_list
+    except Exception as e:
+        logger.error(f"Error getting project file list: {str(e)}", exc_info=True)
+        return []
+
+def _generate_project_files(project_dir_path: Path, file_list: List[str], user_input: str):
+    """
+    Generates the project files based on the provided list and user input.
+    Handles path cleaning, directory creation, special file types, and content generation.
+    """
+    if not file_list:
+        logger.warning("File list is empty. Nothing to generate in _generate_project_files.")
+        return
+
+    for file_path_str in file_list:
+        # Clean and validate the file path
+        clean_path = re.sub(r'^[\'"\s,]+|[\'"\s,]+$', '', file_path_str)
+        if not clean_path:
+            logger.warning(f"Skipping empty file path from plan: '{file_path_str}'")
+            continue
             
-        logger.info(f'File plan: {file_list}')
-        
-        # Create project directory if it doesn't exist
-        project_dir = os.path.abspath("project")
-        if not os.path.exists(project_dir):
-            os.makedirs(project_dir)
-            logger.info(f"Created project directory: {project_dir}")
-        
-        for file_path in file_list:
-            # Clean and validate the file path
-            clean_path = re.sub(r'^[\'"\s,]+|[\'"\s,]+$', '', file_path)
-            if not clean_path:
-                logger.warning(f"Skipping empty file path")
-                continue
-                
-            # Handle paths that already include the project directory
-            if clean_path.startswith("project/"):
-                # Remove the project prefix to avoid double nesting
-                relative_path = clean_path[8:]  # Remove "project/" prefix
-            else:
-                relative_path = clean_path
-                
-            # Ensure we only have the filename part for checking forbidden files
-            base_name = os.path.basename(relative_path).lower()
-            if base_name in ['main.py', 'readme.md', 'requirements.txt']:
-                logger.info(f'Skipping forbidden file: {base_name}')
-                continue
-                
-            # Create the full path within the project directory
-            full_path = os.path.join(project_dir, relative_path)
-            logger.info(f'Generating {full_path}...')
+        # Handle paths that might already include a "project/" prefix from the plan
+        # Assumes project_dir_path.name is the name of the root project folder (e.g., "project")
+        if clean_path.startswith(project_dir_path.name + "/"):
+            relative_path_str = clean_path[len(project_dir_path.name) + 1:]
+        else:
+            relative_path_str = clean_path
             
-            # Create parent directories if they don't exist
-            parent_dir = os.path.dirname(full_path)
-            if parent_dir and not os.path.exists(parent_dir):
+        base_name = os.path.basename(relative_path_str).lower()
+        if base_name in ['main.py', 'readme.md', 'requirements.txt']:
+            logger.info(f'Skipping forbidden file: {base_name} (Original: {file_path_str})')
+            continue
+            
+        full_path = project_dir_path / relative_path_str
+        logger.info(f'Processing file: {full_path} (Original path in plan: {file_path_str})')
+        
+        try:
+            parent_dir = full_path.parent
+            if not parent_dir.exists():
+                logger.info(f"Creating parent directory: {parent_dir}")
                 os.makedirs(parent_dir, exist_ok=True)
-            
-            # Handle special file types
-            if full_path.lower().endswith('.db'):
-                if not os.path.exists(full_path):
+        except Exception as e:
+            logger.error(f"Failed to create parent directory for {full_path}: {str(e)}", exc_info=True)
+            continue
+
+        # Handle special file types
+        if full_path.suffix.lower() == '.db':
+            if not full_path.exists():
+                try:
                     open(full_path, 'wb').close()
                     logger.info(f'{full_path} (empty database file) created.')
-                continue
-                
-            if full_path.lower().endswith('.json'):
-                if not os.path.exists(full_path):
+                except Exception as e:
+                    logger.error(f"Failed to create empty database file {full_path}: {str(e)}", exc_info=True)
+            else:
+                logger.info(f'{full_path} (database file) already exists. Skipping creation.')
+            continue
+            
+        if full_path.suffix.lower() == '.json':
+            if not full_path.exists():
+                try:
                     with open(full_path, 'w', encoding='utf-8') as f:
                         f.write('[]')
                     logger.info(f'{full_path} (empty JSON array) created.')
-                continue
-                
-            # Handle binary files like images
-            if full_path.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.ico')):
-                # Create an empty placeholder image
+                except Exception as e:
+                    logger.error(f"Failed to create empty JSON file {full_path}: {str(e)}", exc_info=True)
+            else:
+                logger.info(f'{full_path} (JSON file) already exists. Skipping creation.')
+            continue
+            
+        if full_path.suffix.lower() in ('.png', '.jpg', '.jpeg', '.gif', '.ico'):
+            if not full_path.exists():
                 try:
                     with open(full_path, 'wb') as f:
-                        # Write a minimal transparent PNG
                         f.write(b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82')
                     logger.info(f'{full_path} (placeholder image) created.')
                 except Exception as e:
-                    logger.error(f"Failed to create placeholder image {full_path}: {str(e)}")
-                continue
-                
-            # Generate content for other files
-            code = generate_file_content(relative_path, user_input)
-            if not code:
-                # Create an empty file as fallback
-                with open(full_path, 'w', encoding='utf-8') as f:
-                    f.write('# Generated file\n')
-                logger.info(f'{full_path} (empty file) created as fallback.')
-                continue
-                
-            # Write the content to the file
+                    logger.error(f"Failed to create placeholder image {full_path}: {str(e)}", exc_info=True)
+            else:
+                logger.info(f'{full_path} (image file) already exists. Skipping creation.')
+            continue
+            
+        logger.info(f"Generating content for {relative_path_str} (Full path: {full_path})")
+        code = generate_file_content(relative_path_str, user_input)
+        
+        if not code:
+            logger.warning(f"No content generated for {relative_path_str}. Creating an empty file as fallback.")
             try:
                 with open(full_path, 'w', encoding='utf-8') as f:
-                    f.write(code)
-                logger.info(f'{full_path} generated successfully.')
-                
-                # Verify the generated content
-                if '```' in code:
-                    logger.warning(f'Content for {full_path} contains code block markers.')
+                    f.write(f'# Empty file: {relative_path_str}\n')
+                logger.info(f'{full_path} (empty file from fallback) created.')
             except Exception as e:
-                logger.error(f'Failed to write {full_path}: {str(e)}')
-                
+                logger.error(f'Failed to write empty fallback file {full_path}: {str(e)}', exc_info=True)
+            continue
+            
+        try:
+            with open(full_path, 'w', encoding='utf-8') as f:
+                f.write(code)
+            logger.info(f'{full_path} generated successfully.')
+            if '```' in code:
+                logger.warning(f'Content for {full_path} may contain code block markers.')
+        except Exception as e:
+            logger.error(f'Failed to write content to {full_path}: {str(e)}', exc_info=True)
+
+def supervisor_generate_project(user_input: str):
+    """
+    Generates project files based on user input by orchestrating helper functions.
+    """
+    logger.info(f"Supervisor starting project generation for input: {user_input[:100]}...")
+    
+    project_files = _get_project_file_list(user_input)
+    
+    if not project_files:
+        logger.error("Project generation aborted: No file list obtained.")
+        return
+
+    try:
+        project_dir_path = Path(os.path.abspath("project"))
+
+        if not project_dir_path.exists():
+            logger.info(f"Creating project directory: {project_dir_path}")
+            os.makedirs(project_dir_path, exist_ok=True)
+        else:
+            logger.info(f"Project directory {project_dir_path} already exists.")
+
+        _generate_project_files(project_dir_path, project_files, user_input)
+        
+        logger.info("Supervisor finished project generation.")
+        
     except Exception as e:
-        logger.error(f'Error in project generation: {str(e)}')
-        import traceback
-        logger.error(traceback.format_exc())
+        logger.error(f'Critical error during supervisor_generate_project: {str(e)}', exc_info=True)
 
 def verify_file_content(file_path: str) -> OperationResult:
-    """Verify the generated file content for common issues."""
-    try:
-        with open(file_path, 'r', encoding='utf-8') as f:
-            content = f.read()
-            
-        # Check for common issues
-        issues = []
-        
-        # Check for remaining code block markers
-        if '```' in content:
-            issues.append("Found remaining code block markers")
-            
-        # Check for incomplete code blocks
-        if content.count('```') % 2 != 0:
-            issues.append("Found unclosed code block")
-            
-        # Check for empty content
-        if not content.strip():
-            issues.append("File is empty")
-            
-        if issues:
-            return OperationResult(False, error=", ".join(issues))
-            
-        return OperationResult(True)
-    except Exception as e:
-        return OperationResult(False, error=str(e))
+# verify_file_content was moved to file_utils.py
 
-def parse_python_traceback(traceback_str: str):
-    """
-    Parse a Python traceback string and extract a list of (file_path, line_number) tuples for error locations.
-    Returns a list of dicts: [{'file': file_path, 'line': line_number}]
-    """
-    import re
-    error_locations = []
-    pattern = re.compile(r'File "([^"]+)", line (\d+)')
-    for match in pattern.finditer(traceback_str):
-        file_path, line_str = match.groups()
-        error_locations.append({'file': file_path, 'line': int(line_str)})
-    return error_locations
-
-def agent_per_file_edit(error_message: str, traceback_str: str, minimal_files: bool = True):
-    """
-    Parse the error traceback, assign an agent to each affected file (or chunk), and fix the error.
-    Only edit the exact files/lines needed. Validate fixes after each change.
-    If minimal_files is True, do not generate or edit unnecessary files (like README, docs, or tests).
-    """
-    error_locations = parse_python_traceback(traceback_str)
-    for loc in error_locations:
-        file_path = loc['file']
-        line_number = loc['line']
-        # For large files, determine chunk
-        file_size = os.path.getsize(file_path)
-        if file_size > 100_000:
-            chunk_size = 100
-            with open(file_path, 'r', encoding='utf-8') as f:
-                lines = f.readlines()
-            total_chunks = (len(lines) + chunk_size - 1) // chunk_size
-            chunk_index = (line_number - 1) // chunk_size
-            chunk_lines = lines[chunk_index*chunk_size:(chunk_index+1)*chunk_size]
-            chunk_content = ''.join(chunk_lines)
-            print(f"Agent for {file_path} [chunk {chunk_index}]: analyzing and fixing error at line {line_number}...")
-            # ...agent logic to fix errors in chunk_content...
-            # After fix, validate by running code/tests
-        else:
-            print(f"Agent for {file_path}: analyzing and fixing error at line {line_number}...")
-            # ...agent logic to fix errors in the file...
-            # After fix, validate by running code/tests
-    if minimal_files:
-        print("Minimal files mode: No extra files (README, docs, tests) will be generated or edited unless explicitly requested.")
+# --- Main Application Logic ---
 
 def get_multi_line_input() -> str:
-    """Get multi-line input from user until 'END' is entered on a new line."""
-    print("Enter your prompt (type 'END' on a new line when finished):")
+    """
+    Prompts the user for multi-line input until they type 'END' on a new line.
+
+    Returns:
+        A string containing all lines of user input, joined by newlines.
+    """
+    print("\nEnter your prompt for the AI agent. Type 'END' on a new line when finished, or 'exit'/'quit' to close the agent.")
     lines = []
     while True:
         line = input()
@@ -707,29 +580,55 @@ def main():
     print("Welcome to Gemini Super Agent!")
     print("To enter multi-line input, type your text and press Enter.")
     print("When finished, type 'END' on a new line and press Enter.")
-    print("To exit, type 'exit' or 'quit'.")
-    print()
+    # print("To exit, type 'exit' or 'quit'.") # This is now part of the prompt message
+    print("-" * 30) # Separator
     
     while True:
         try:
-            user_input = get_multi_line_input()
-            if not user_input.strip():
+            user_input = get_multi_line_input().strip() # Strip leading/trailing whitespace
+            
+            if not user_input: # Skip if input is empty after stripping
+                logger.info("Empty input received.")
                 continue
                 
             if user_input.lower() in ('exit', 'quit'):
-                logger.info('Goodbye!')
+                logger.info("Exiting agent as per user request.")
+                print("Goodbye! 👋")
                 break
                 
+            logger.info(f"User input received (first 100 chars): {user_input[:100]}")
             if is_multifile_request(user_input):
-                logger.info('Detected multi-file/full-project request. Using supervisor workflow...')
+                logger.info("Multi-file/project request detected. Engaging supervisor workflow...")
+                print("🤖 Supervisor: Generating project based on your request...")
                 supervisor_generate_project(user_input)
+                print("🤖 Supervisor: Project generation process completed.")
+                # After project generation, perhaps list top-level files or suggest next steps?
+                project_dir = Path("project").resolve()
+                if project_dir.exists():
+                    top_level_items = [item.name for item in project_dir.iterdir()]
+                    print(f"🤖 Supervisor: Project generated in '{project_dir}'. Top-level items: {top_level_items}")
             else:
+                logger.info("Single message/task detected. Sending to Gemini client...")
+                print("🤖 Agent: Processing your request...")
                 response = genai_client.send_message(user_input)
-                print(f"Agent: {response}")
-                
+                if response:
+                    print(f"\n🤖 Agent Response:\n{'-'*20}\n{response}\n{'-'*20}")
+                else:
+                    print("🤖 Agent: Received no specific response or an error occurred. Please check logs.")
+                    
+        except KeyboardInterrupt:
+            logger.info("User interrupted the agent (Ctrl+C). Exiting.")
+            print("\n🤖 Agent: Exiting due to user interruption. Goodbye!")
+            break
         except Exception as e:
-            logger.error(f"Error occurred: {str(e)}")
-            print(f"Agent: An error occurred. Please try again later.")
+            logger.error(f"An unexpected error occurred in the main loop: {str(e)}", exc_info=True)
+            print(f"🤖 Agent: An unexpected error occurred. Please check the 'agent.log' for details and try again.")
+            # Potentially add a short delay or specific recovery logic here if needed.
+            time.sleep(1) # Brief pause
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except Exception as e: # Catch-all for any error during startup before main loop's try-except
+        logger.critical(f"Fatal error during agent startup: {e}", exc_info=True)
+        print(f"A critical error occurred during startup: {e}. Please check agent.log. Exiting.")
